@@ -44,6 +44,7 @@ import java.util.logging.Logger;
 import org.jenkinsci.plugins.workflow.cps.persistence.PersistIn;
 import org.jenkinsci.plugins.workflow.flow.FlowExecution;
 import org.jenkinsci.plugins.workflow.graph.FlowNode;
+import org.jenkinsci.plugins.workflow.steps.StepContext;
 import org.jenkinsci.plugins.workflow.steps.StepExecution;
 import org.jenkinsci.plugins.workflow.support.concurrent.Futures;
 import org.jenkinsci.plugins.workflow.support.concurrent.Timeout;
@@ -308,7 +309,12 @@ public final class CpsThread implements Serializable {
     @CpsVmThreadOnly
     public void stop(Throwable t) {
         StepExecution s = getStep(); // this is the part that should run in CpsVmThread
-        if (s == null) {
+        // The step may have already recorded its outcome (e.g. sh responded in time), while
+        // the task that processes its completion is still queued on the CPS VM thread. In
+        // that case s.stop(t) would fall through to CpsStepContext.completed() and be silently
+        // dropped as a redundant outcome. Such a step should be treated as absent for the
+        // purpose of interruption.
+        if (s == null || isAlreadyCompleted(s)) {
             // if it's not running inside a StepExecution, we need to set an interrupt flag
             // and interrupt at an earliest convenience
             Outcome o = new Outcome(null, t);
@@ -327,6 +333,11 @@ public final class CpsThread implements Serializable {
             t.addSuppressed(e);
             s.getContext().onFailure(t);
         }
+    }
+
+    private static boolean isAlreadyCompleted(StepExecution s) {
+        StepContext c = s.getContext();
+        return c instanceof CpsStepContext && ((CpsStepContext) c).isCompleted();
     }
 
     public List<StackTraceElement> getStackTrace() {
