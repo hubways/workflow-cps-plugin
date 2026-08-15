@@ -34,6 +34,7 @@ import hudson.security.ACL;
 import hudson.security.ACLContext;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import jenkins.model.CauseOfInterruption;
 import jenkins.model.InterruptedBuildAction;
 import jenkins.model.Jenkins;
@@ -49,6 +50,7 @@ import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.jvnet.hudson.test.BuildWatcher;
+import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.TestExtension;
 import org.kohsuke.stapler.DataBoundConstructor;
@@ -98,24 +100,21 @@ public class CpsThreadTest {
      * step completion are queued behind it in the order that reproduces the race, and
      * finally the latch is released.
      */
+    @Issue("https://github.com/jenkinsci/workflow-cps-plugin/issues/1333")
     @Test
     public void interruptNotLostWhenStepAlreadyCompleted() throws Exception {
-        WorkflowJob p = r.createProject(WorkflowJob.class, "p");
+        var p = r.createProject(WorkflowJob.class, "p");
         p.setDefinition(new CpsFlowDefinition("semaphore 'victim'", true));
-        WorkflowRun b = p.scheduleBuild2(0).waitForStart();
+        var b = p.scheduleBuild2(0).waitForStart();
         SemaphoreStep.waitForStart("victim/1", b);
 
-        final SemaphoreStep.Execution[] victim = new SemaphoreStep.Execution[1];
-        StepExecution.acceptAll(SemaphoreStep.Execution.class, exec -> {
-                    if (exec.getContext() != null) {
-                        victim[0] = exec;
-                    }
-                })
+        var victim = new AtomicReference<SemaphoreStep.Execution>();
+        StepExecution.acceptAll(SemaphoreStep.Execution.class, exec -> victim.set(exec))
                 .get();
-        assertNotNull(victim[0]);
+        assertNotNull(victim.get());
 
-        CpsFlowExecution execution = (CpsFlowExecution) b.getExecution();
-        CountDownLatch hold = new CountDownLatch(1);
+        var execution = (CpsFlowExecution) b.getExecution();
+        var hold = new CountDownLatch(1);
 
         // Occupy the single CPS VM thread so the cancellation (queued next) and the
         // processing of the step completion (queued after that) pile up behind it.
@@ -136,7 +135,7 @@ public class CpsThreadTest {
         // Queue the cancellation while the CPS VM thread is still occupied - this
         // mirrors what ParallelStepExecution.stop() (failFast) or
         // TimeoutStepExecution.cancel() do under the hood.
-        FlowInterruptedException cause = new FlowInterruptedException(Result.ABORTED);
+        var cause = new FlowInterruptedException(Result.ABORTED);
         execution.runInCpsVmThread(new FutureCallback<CpsThreadGroup>() {
             @Override
             public void onSuccess(CpsThreadGroup g) {
@@ -153,7 +152,7 @@ public class CpsThreadTest {
         // remote sh step would: the outcome is recorded synchronously here on the live
         // step context, while the task that clears getStep() and resumes the thread is
         // only queued now - after the cancellation above.
-        victim[0].getContext().onSuccess(null);
+        victim.get().getContext().onSuccess(null);
 
         // Let the CPS VM thread process the queued cancellation and completion tasks.
         hold.countDown();
