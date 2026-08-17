@@ -313,7 +313,7 @@ public final class CpsThread implements Serializable {
         // that case s.stop(t) would fall through to CpsStepContext.completed() and be silently
         // dropped as a redundant outcome. Such a step should be treated as absent for the
         // purpose of interruption.
-        if (s == null || s.getContext() instanceof CpsStepContext c && c.isCompleted()) {
+        if (s == null || (s.getContext() instanceof CpsStepContext c && c.isCompleted())) {
             // if it's not running inside a StepExecution, we need to set an interrupt flag
             // and interrupt at an earliest convenience
             Outcome o = new Outcome(null, t);
